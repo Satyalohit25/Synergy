@@ -31,7 +31,13 @@ class FieldType(Enum):
 class DataType(Enum):
     """Enumeration for data types."""
 
-    INTEGER, FLOAT, PERCENTAGE, CURRENCY, TIME_SERIES = (
+    (
+        INTEGER,
+        FLOAT,
+        PERCENTAGE,
+        CURRENCY,
+        TIME_SERIES,
+    ) = (
         "Integer",
         "Float",
         "Percentage",
@@ -268,9 +274,26 @@ class DataGenerator:
         return pd.Series(np.random.choice([True, False], num_rows))
 
     def _generate_custom_list(self, params: ParamDict, num_rows: int) -> pd.Series:
-        values, percentages = params["Values"], params["Percentages"]
-        percentages = np.array(percentages) / sum(percentages) * 100
-        choices = np.random.choice(values, num_rows, p=percentages / 100)
+        """
+        Generate a custom list based on user-defined values and their corresponding percentages.
+        Args:
+            params (ParamDict): A dictionary containing "Values" and "Percentages".
+            num_rows (int): Number of rows in the generated dataset.
+        Returns:
+            pd.Series: A Pandas Series with randomly chosen values based on percentages.
+        """
+        # Extract values and percentages
+        values = params["Value Names"]
+        percentages = params["Percentages"]
+        # Ensure percentages sum to 100 and values/percentages match
+        if not np.isclose(sum(percentages), 100.0):
+            raise ValueError("Percentages must sum to 100.")
+        if len(values) != len(percentages):
+            raise ValueError("The number of values and percentages must match.")
+        # Convert percentages to probabilities
+        probabilities = np.array(percentages) / 100
+        # Generate random choices
+        choices = np.random.choice(values, num_rows, p=probabilities)
         return pd.Series(choices)
 
     def _generate_ordinal(self, params: ParamDict, num_rows: int) -> pd.Series:
@@ -293,7 +316,6 @@ class DataGenerator:
         base_mean, base_std = base_series.mean(), base_series.std()
         base_standardized = (base_series - base_mean) / base_std
         random_data = np.random.normal(0, 1, num_rows)
-
         # Vectorized correlation adjustment
         correlated = (
             correlation * base_standardized + np.sqrt(1 - correlation**2) * random_data
@@ -343,13 +365,11 @@ class DataGenerator:
                 standardized_columns.append(
                     np.zeros(num_rows)
                 )  # Default to zero if column is missing
-
         base_standardized = (base_data - base_data.mean()) / base_data.std()
         standardized_matrix = np.column_stack(
             [base_standardized, *standardized_columns]
         )
         print("Exisiting Data Columns:", existing_data.keys())
-
         # Construct correlation matrix
         correlation_matrix = np.eye(len(correlations) + 1)
         for i, corr in enumerate(correlations):
@@ -357,26 +377,20 @@ class DataGenerator:
             correlation_range = self.CORRELATION_TYPES.get(
                 corr.get("Correlation Value", "No Correlation"), (0, 0)
             )
-
             # Randomly select a single correlation value for each correlation type
             corr_value = random.uniform(correlation_range[0], correlation_range[1])
-
             # Apply the same correlation value to the matrix for both directions (symmetric)
             correlation_matrix[0, i + 1] = corr_value
             correlation_matrix[i + 1, 0] = corr_value
-
         # Ensure stability (positive semi-definite)
         correlation_matrix = np.maximum(correlation_matrix, correlation_matrix.T)
-
         try:
             cholesky_matrix = cholesky(correlation_matrix)
         except LinAlgError:
             raise ValueError("Correlation matrix is not positive semi-definite")
-
         # Generate correlated data using Cholesky matrix
         correlated_matrix = standardized_matrix @ cholesky_matrix.T
         result = (correlated_matrix[:, 0] * base_data.std()) + base_data.mean()
-
         return pd.Series(result, dtype=np.float32)
 
 
@@ -541,12 +555,82 @@ class DatasetUI:
                     "Frequency", options=["D", "M", "Y"], key=f"freq_{idx}"
                 )
         elif data_type == DataType.CUSTOM_LIST:
-            params["Values"] = st.text_input(
-                "Values (comma-separated)", key=f"values_{idx}"
+            st.subheader("Configure Custom List")
+
+            # Number of values
+            num_values = st.number_input(
+                "Number of Values",
+                min_value=1,
+                max_value=st.session_state.num_rows,
+                value=3,  # Default for demonstration
+                step=1,
+                key=f"num_values_{idx}",
             )
-            params["Weights"] = st.text_input(
-                "Weights (comma-separated)", key=f"weights_{idx}"
+            params["Num Values"] = num_values
+
+            # Initialize lists for names and percentages
+            value_names = [None] * int(num_values)
+            percentages = [None] * int(
+                num_values
+            )  # Start with None for unset percentages
+
+            # Define remaining percentage logic
+            def distribute_remaining(percentages):
+                total_assigned = sum(p for p in percentages if p is not None)
+                remaining = max(0.0, 100.0 - total_assigned)  # Remaining percentage
+                num_unset = len([p for p in percentages if p is None])
+
+                # Distribute remaining percentage among unset values
+                auto_fill = remaining / num_unset if num_unset > 0 else 0.0
+                for i, p in enumerate(percentages):
+                    if p is None:
+                        percentages[i] = auto_fill
+                return auto_fill
+
+            # Dynamic inputs for names and percentages
+            st.write("### Define Values and Percentages")
+            remaining_label = st.empty()
+            for i in range(int(num_values)):
+                col1, col2 = st.columns([2, 1])  # Name gets more space
+
+                with col1:
+                    value_names[i] = st.text_input(
+                        f"Value {i + 1} Name",
+                        value=f"Value_{i + 1}",  # Default name
+                        key=f"value_name_{idx}_{i}",
+                    )
+
+                with col2:
+                    # Input for percentage with live redistribution
+                    percentage = st.number_input(
+                        f"Value {i + 1} %",
+                        min_value=0.0,
+                        max_value=100.0,
+                        step=1.0,
+                        key=f"percentage_{idx}_{i}",
+                        format="%.2f",
+                    )
+                    percentages[i] = percentage if percentage > 0 else None
+
+            # Calculate auto-filled percentage and update display
+            auto_fill_value = distribute_remaining(percentages)
+            remaining_label.markdown(
+                f"**Remaining percentage auto-filled for unset values: {auto_fill_value:.2f}%**"
+                if auto_fill_value > 0
+                else "**All percentages set manually.**"
             )
+
+            # Display validation feedback
+            if sum(percentages) != 100.0:
+                st.warning(
+                    f"Total percentage must equal 100%. Currently: {sum(percentages):.2f}%"
+                )
+            else:
+                st.success(f"Total percentage is valid: {sum(percentages):.2f}%")
+
+                # Save params
+            params["Value Names"] = value_names
+            params["Percentages"] = percentages
         st.session_state.columns[idx].params = params
 
     def _render_column_management(self):
@@ -667,11 +751,18 @@ class DatasetUI:
                 if (
                     field_type == FieldType.CONTINUOUS.value
                     and t.value
-                    in ["Integer", "Float", "Percentage", "Currency", "Time Series"]
+                    in [
+                        "Integer",
+                        "Float",
+                        "Percentage",
+                        "Currency",
+                        "Time Series",
+                    ]
                 )
                 or (
                     field_type == FieldType.CATEGORICAL.value
-                    and t.value in ["Boolean", "Gender", "Country", "Job Title"]
+                    and t.value
+                    in ["Boolean", "Gender", "Country", "Job Title", "Custom List"]
                 )
             ]
             data_type = st.selectbox(
@@ -695,7 +786,6 @@ class DatasetUI:
 
     def _render_correlation_config(self):
         st.write("## Step 3: Configure Correlations")
-
         # Filter for numeric columns
         numeric_columns = [
             col
@@ -708,11 +798,9 @@ class DatasetUI:
                 # Add more types as needed
             ]
         ]
-
         if len(numeric_columns) < 2:
             st.info("Add at least two numeric columns to configure correlations.")
             return
-
         with st.container(border=True):
             st.write("### Correlation Matrix Configuration")
             st.markdown("""
@@ -721,7 +809,6 @@ class DatasetUI:
             - 🔴 **Negative Correlation**: Variables move in opposite directions
             - 🔷 **No Correlation**: Variables are independent
             """)
-
             # Initialize correlation matrix
             correlation_matrix = np.full(
                 (len(numeric_columns), len(numeric_columns)), "No Correlation"
@@ -729,7 +816,6 @@ class DatasetUI:
             correlation_options = ["No Correlation"] + list(
                 self.CORRELATION_TYPES.keys()
             )
-
             # Create a grid of selectboxes for each pair of columns
             for row in range(len(numeric_columns)):
                 cols = st.columns(len(numeric_columns))
@@ -746,11 +832,9 @@ class DatasetUI:
                                 ),
                                 key=f"corr_{row}_{col}",
                             )
-
                             # Set correlation value in the matrix
                             correlation_matrix[row, col] = selected_corr
                             correlation_matrix[col, row] = selected_corr
-
             # Apply correlations button
             if st.button("Apply Correlations"):
                 for row in range(len(numeric_columns)):
@@ -765,7 +849,6 @@ class DatasetUI:
                     ]
                     column.correlations = column_correlations
                 st.success("Correlations updated successfully!")
-
             # Display correlation matrix overview
             st.write("### Correlation Matrix Overview")
             corr_df = pd.DataFrame(
@@ -799,7 +882,6 @@ class DatasetUI:
                         st.session_state.num_rows,
                         data if apply_correlations else None,
                     )
-
                 st.session_state.df = pd.DataFrame(data)
                 elapsed_time = time.time() - start_time
                 st.success(
@@ -856,6 +938,7 @@ class DataAnalyzer:
     @staticmethod
     def analyze_dataset(df: pd.DataFrame) -> None:
         """Perform basic analysis on the dataset."""
+        st.markdown("---")
         st.write("### Dataset Summary")
         st.write(df.describe())
         numeric_df = df.select_dtypes(include=["number"])
