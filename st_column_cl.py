@@ -1,3 +1,4 @@
+# Imports
 from datetime import date
 from dataclasses import dataclass
 from enum import Enum
@@ -578,7 +579,7 @@ class DatasetUI:
 
     def render_configuration_ui(self):
         """Render the main configuration interface."""
-        st.title("Dataset Generator")
+        st.title("Dr.Shah's Dataset Generator")
         with st.sidebar:
             st.title("Help Information")
             st.markdown("""
@@ -699,18 +700,19 @@ class DatasetUI:
         numeric_columns = [
             col
             for col in st.session_state.columns
-            if col.type in [
+            if col.type
+            in [
                 DataType.INTEGER,
                 DataType.FLOAT,
                 DataType.PERCENTAGE,
                 # Add more types as needed
             ]
         ]
-        
+
         if len(numeric_columns) < 2:
             st.info("Add at least two numeric columns to configure correlations.")
             return
-        
+
         with st.container(border=True):
             st.write("### Correlation Matrix Configuration")
             st.markdown("""
@@ -724,7 +726,9 @@ class DatasetUI:
             correlation_matrix = np.full(
                 (len(numeric_columns), len(numeric_columns)), "No Correlation"
             )
-            correlation_options = ["No Correlation"] + list(self.CORRELATION_TYPES.keys())
+            correlation_options = ["No Correlation"] + list(
+                self.CORRELATION_TYPES.keys()
+            )
 
             # Create a grid of selectboxes for each pair of columns
             for row in range(len(numeric_columns)):
@@ -737,7 +741,9 @@ class DatasetUI:
                             selected_corr = st.selectbox(
                                 f"Correlation between {numeric_columns[row].name} and {numeric_columns[col].name}",
                                 options=correlation_options,
-                                index=correlation_options.index(correlation_matrix[row, col]),
+                                index=correlation_options.index(
+                                    correlation_matrix[row, col]
+                                ),
                                 key=f"corr_{row}_{col}",
                             )
 
@@ -848,18 +854,6 @@ class DataAnalyzer:
                         )
 
     @staticmethod
-    def analyze_correlations(numeric_df: pd.DataFrame) -> None:
-        """Visualize correlations if multiple numeric columns exist, triggered by user request."""
-        if numeric_df.shape[1] > 1:
-            st.write("### Correlation Analysis")
-            if st.button("Show Correlation Matrix"):
-                corr_matrix = numeric_df.corr()
-                fig, ax = plt.subplots(figsize=(8, 6))
-                sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", ax=ax)
-                st.pyplot(fig)
-                plt.close()
-
-    @staticmethod
     def analyze_dataset(df: pd.DataFrame) -> None:
         """Perform basic analysis on the dataset."""
         st.write("### Dataset Summary")
@@ -867,7 +861,6 @@ class DataAnalyzer:
         numeric_df = df.select_dtypes(include=["number"])
         if not numeric_df.empty:
             DataAnalyzer.plot_distributions(numeric_df)
-            DataAnalyzer.analyze_correlations(numeric_df)
         else:
             st.write("No numeric columns available for analysis.")
 
