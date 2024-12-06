@@ -398,8 +398,11 @@ class DataGenerator:
             # Apply the same correlation value to the matrix for both directions (symmetric)
             correlation_matrix[0, i + 1] = corr_value
             correlation_matrix[i + 1, 0] = corr_value
-        # Ensure stability (positive semi-definite)
-        correlation_matrix = np.maximum(correlation_matrix, correlation_matrix.T)
+        def nearest_psd(matrix):
+            eigvals, eigvecs = np.linalg.eigh(matrix)
+            eigvals[eigvals < 0] = 0
+            return eigvecs @ np.diag(eigvals) @ eigvecs.T
+        correlation_matrix = nearest_psd(correlation_matrix)
         try:
             cholesky_matrix = cholesky(correlation_matrix)
         except LinAlgError:
