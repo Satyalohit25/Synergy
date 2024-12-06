@@ -1,20 +1,20 @@
 # Imports
-from datetime import date
+import random
+import time
 from dataclasses import dataclass
+from datetime import date
 from enum import Enum
-from typing import Any, Dict, List, Union, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import random
-from pathlib import Path
-import matplotlib.pyplot as plt
-from scipy import stats
-from scipy.stats import norm
-from scipy.linalg import cholesky, LinAlgError
 import seaborn as sns
 import streamlit as st
 from faker import Faker
-import time
+from scipy import stats
+from scipy.linalg import LinAlgError, cholesky
+from scipy.stats import norm
 
 # Type aliases
 ParamDict = Dict[str, Any]
@@ -282,19 +282,35 @@ class DataGenerator:
         Returns:
             pd.Series: A Pandas Series with randomly chosen values based on percentages.
         """
-        # Extract values and percentages
         values = params["Value Names"]
         percentages = params["Percentages"]
-        # Ensure percentages sum to 100 and values/percentages match
+        individual_means = params["Individual Means"]
+        individual_stds = params["Individual Standard Deviations"]
+        # Validate percentages
         if not np.isclose(sum(percentages), 100.0):
             raise ValueError("Percentages must sum to 100.")
-        if len(values) != len(percentages):
-            raise ValueError("The number of values and percentages must match.")
+        if (
+            len(values) != len(percentages)
+            or len(values) != len(individual_means)
+            or len(values) != len(individual_stds)
+        ):
+            raise ValueError(
+                "The number of values, percentages, means, and standard deviations must match."
+            )
         # Convert percentages to probabilities
         probabilities = np.array(percentages) / 100
-        # Generate random choices
-        choices = np.random.choice(values, num_rows, p=probabilities)
-        return pd.Series(choices)
+        # Generate values based on probabilities
+        generated_values = []
+        for _ in range(num_rows):
+            # Select a value based on its percentage
+            value_idx = np.random.choice(len(values), p=probabilities)
+            # Generate a value using the corresponding mean and standard deviation
+            generated_value = np.random.normal(
+                loc=individual_means[value_idx], scale=individual_stds[value_idx]
+            )
+            # Append the selected value's name
+            generated_values.append(values[value_idx])
+        return pd.Series(generated_values)
 
     def _generate_ordinal(self, params: ParamDict, num_rows: int) -> pd.Series:
         categories = params.get("Categories", "Low,Medium,High").split(",")
@@ -561,69 +577,77 @@ class DatasetUI:
                 "Number of Values",
                 min_value=1,
                 max_value=st.session_state.num_rows,
-                value=3,  # Default for demonstration
+                value=3,
                 step=1,
                 key=f"num_values_{idx}",
             )
             params["Num Values"] = num_values
-            # Initialize lists for names and percentages
-            value_names = [None] * int(num_values)
-            percentages = [None] * int(
-                num_values
-            )  # Start with None for unset percentages
-
-            # Define remaining percentage logic
-            def distribute_remaining(percentages):
-                total_assigned = sum(p for p in percentages if p is not None)
-                remaining = max(0.0, 100.0 - total_assigned)  # Remaining percentage
-                num_unset = len([p for p in percentages if p is None])
-                # Distribute remaining percentage among unset values
-                auto_fill = remaining / num_unset if num_unset > 0 else 0.0
-                for i, p in enumerate(percentages):
-                    if p is None:
-                        percentages[i] = auto_fill
-                return auto_fill
-
-            # Dynamic inputs for names and percentages
-            st.write("### Define Values and Percentages")
-            remaining_label = st.empty()
-            for i in range(int(num_values)):
-                col1, col2 = st.columns([2, 1])  # Name gets more space
-                with col1:
-                    value_names[i] = st.text_input(
-                        f"Value {i + 1} Name",
-                        value=f"Value_{i + 1}",  # Default name
-                        key=f"value_name_{idx}_{i}",
-                    )
-                with col2:
-                    # Input for percentage with live redistribution
-                    percentage = st.number_input(
-                        f"Value {i + 1} %",
-                        min_value=0.0,
-                        max_value=100.0,
-                        step=1.0,
-                        key=f"percentage_{idx}_{i}",
-                        format="%.2f",
-                    )
-                    percentages[i] = percentage if percentage > 0 else None
-            # Calculate auto-filled percentage and update display
-            auto_fill_value = distribute_remaining(percentages)
-            remaining_label.markdown(
-                f"**Remaining percentage auto-filled for unset values: {auto_fill_value:.2f}%**"
-                if auto_fill_value > 0
-                else "**All percentages set manually.**"
-            )
-            # Display validation feedback
-            if sum(percentages) != 100.0:
+            # Initialize lists for Value Names, Percentages, Means, and Standard Deviations
+            value_names = []
+            percentages = []
+            individual_means = []
+            individual_stds = []
+            # Dynamic inputs for each value
+            for i in range(num_values):
+                st.write(f"### Configuration for Value {i + 1}")
+                # Name of the value
+                value_name = st.text_input(
+                    f"Name for Value {i + 1}",
+                    value=f"Value_{i + 1}",
+                    key=f"value_name_{idx}_{i}",
+                )
+                value_names.append(value_name)
+                # Percentage for the value
+                percentage = st.number_input(
+                    f"Percentage for {value_name} (leave blank for auto-calculation)",
+                    min_value=0.0,
+                    max_value=100.0,
+                    step=1.0,
+                    key=f"percentage_{idx}_{i}",
+                    format="%.2f",
+                )
+                percentages.append(percentage if percentage > 0 else None)
+                # Mean for the value
+                mean = st.number_input(
+                    f"Mean for {value_name}",
+                    value=0.0,
+                    key=f"mean_{idx}_{i}",
+                )
+                individual_means.append(mean)
+                # Standard Deviation for the value
+                std = st.number_input(
+                    f"Standard Deviation for {value_name}",
+                    value=1.0,
+                    min_value=0.001,
+                    key=f"std_{idx}_{i}",
+                )
+                individual_stds.append(std)
+            # Auto-fill remaining percentage
+            remaining_percentage = 100.0 - sum(p for p in percentages if p is not None)
+            unassigned_count = percentages.count(None)
+            if unassigned_count > 0:
+                auto_fill_value = remaining_percentage / unassigned_count
+                percentages = [
+                    p if p is not None else auto_fill_value for p in percentages
+                ]
+            # Validate percentages
+            total_percentage = sum(percentages)
+            if not np.isclose(total_percentage, 100.0):
                 st.warning(
-                    f"Total percentage must equal 100%. Currently: {sum(percentages):.2f}%"
+                    f"Total percentage must equal 100%. Currently: {total_percentage:.2f}%"
                 )
             else:
-                st.success(f"Total percentage is valid: {sum(percentages):.2f}%")
-                # Save params
+                st.success(f"Total percentage is valid: {total_percentage:.2f}%")
+            # Display remaining percentage
+            st.markdown(
+                f"**Remaining percentage auto-filled: {remaining_percentage:.2f}%**"
+            )
+            # Store parameters
             params["Value Names"] = value_names
             params["Percentages"] = percentages
-        st.session_state.columns[idx].params = params
+            params["Individual Means"] = individual_means
+            params["Individual Standard Deviations"] = individual_stds
+            st.session_state.columns[idx].params = params
 
     def _render_column_management(self):
         """Render column management controls."""
