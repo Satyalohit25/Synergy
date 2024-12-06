@@ -556,7 +556,6 @@ class DatasetUI:
                 )
         elif data_type == DataType.CUSTOM_LIST:
             st.subheader("Configure Custom List")
-
             # Number of values
             num_values = st.number_input(
                 "Number of Values",
@@ -567,7 +566,6 @@ class DatasetUI:
                 key=f"num_values_{idx}",
             )
             params["Num Values"] = num_values
-
             # Initialize lists for names and percentages
             value_names = [None] * int(num_values)
             percentages = [None] * int(
@@ -579,7 +577,6 @@ class DatasetUI:
                 total_assigned = sum(p for p in percentages if p is not None)
                 remaining = max(0.0, 100.0 - total_assigned)  # Remaining percentage
                 num_unset = len([p for p in percentages if p is None])
-
                 # Distribute remaining percentage among unset values
                 auto_fill = remaining / num_unset if num_unset > 0 else 0.0
                 for i, p in enumerate(percentages):
@@ -592,14 +589,12 @@ class DatasetUI:
             remaining_label = st.empty()
             for i in range(int(num_values)):
                 col1, col2 = st.columns([2, 1])  # Name gets more space
-
                 with col1:
                     value_names[i] = st.text_input(
                         f"Value {i + 1} Name",
                         value=f"Value_{i + 1}",  # Default name
                         key=f"value_name_{idx}_{i}",
                     )
-
                 with col2:
                     # Input for percentage with live redistribution
                     percentage = st.number_input(
@@ -611,7 +606,6 @@ class DatasetUI:
                         format="%.2f",
                     )
                     percentages[i] = percentage if percentage > 0 else None
-
             # Calculate auto-filled percentage and update display
             auto_fill_value = distribute_remaining(percentages)
             remaining_label.markdown(
@@ -619,7 +613,6 @@ class DatasetUI:
                 if auto_fill_value > 0
                 else "**All percentages set manually.**"
             )
-
             # Display validation feedback
             if sum(percentages) != 100.0:
                 st.warning(
@@ -627,7 +620,6 @@ class DatasetUI:
                 )
             else:
                 st.success(f"Total percentage is valid: {sum(percentages):.2f}%")
-
                 # Save params
             params["Value Names"] = value_names
             params["Percentages"] = percentages
