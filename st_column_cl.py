@@ -119,17 +119,33 @@ class DataGenerator:
 
     def _generate_integer(self, params: ParamDict, num_rows: int) -> pd.Series:
         min_val, max_val = params.get("Min", 0), params.get("Max", 100)
+        print(f"DEBUG: Min={min_val}, Max={max_val}")  # Debug Min and Max values
+
+        if min_val >= max_val:
+            raise ValueError("Min must be less than Max.")
+
         use_normal = params.get("Use Normal Distribution", False)
         if use_normal:
-            mean, std = (
-                float(params.get("Mean", (min_val + max_val) / 2)),
-                float(params.get("Standard Deviation", (max_val - min_val) / 6)),
-            )
-            values = np.clip(
-                np.round(np.random.normal(mean, std, num_rows)), min_val, max_val
-            ).astype(int)
-            return pd.Series(values)
-        return pd.Series(np.random.randint(min_val, max_val, num_rows))
+            mean = params.get("Mean", (min_val + max_val) / 2)
+            std = params.get("Standard Deviation", (max_val - min_val) / 6)
+            print(f"DEBUG: Mean={mean}, Std={std}")  # Debug Mean and Std values
+
+            # Generate normal distribution values and clip them within Min and Max
+            values = np.random.normal(mean, std, num_rows)
+            clipped_values = np.clip(values, min_val, max_val)
+            print(
+                f"DEBUG: Generated Values={values}, Clipped Values={clipped_values}"
+            )  # Debug generated values
+
+            return pd.Series(clipped_values.round().astype(int))
+        else:
+            # Generate uniformly distributed integers within Min and Max
+            values = np.random.randint(min_val, max_val, num_rows)
+            print(f"DEBUG: Generated Uniform Values={values}")  # Debug uniform values
+
+            # Clip the uniform values to ensure they respect the Min and Max
+            clipped_values = np.clip(values, min_val, max_val)
+            return pd.Series(clipped_values)
 
     def _generate_float(self, params: ParamDict, num_rows: int) -> pd.Series:
         min_val, max_val, decimals = (
@@ -346,6 +362,11 @@ class DataGenerator:
         existing_data: Optional[Dict[str, pd.Series]] = None,
     ) -> pd.Series:
         """Optimized data generation with optional correlation handling."""
+        params = column_config.params
+        print(f"DEBUG: column_config.params = {params}")
+        
+        if column_config.type == DataType.INTEGER:
+            return self._generate_integer(params, num_rows)
         generator = self.generators.get(column_config.type)
         if not generator:
             raise ValueError(
@@ -398,10 +419,12 @@ class DataGenerator:
             # Apply the same correlation value to the matrix for both directions (symmetric)
             correlation_matrix[0, i + 1] = corr_value
             correlation_matrix[i + 1, 0] = corr_value
+
         def nearest_psd(matrix):
             eigvals, eigvecs = np.linalg.eigh(matrix)
             eigvals[eigvals < 0] = 0
             return eigvecs @ np.diag(eigvals) @ eigvecs.T
+
         correlation_matrix = nearest_psd(correlation_matrix)
         try:
             cholesky_matrix = cholesky(correlation_matrix)
@@ -491,26 +514,12 @@ class DatasetUI:
         ]:
             col3, col4 = st.columns(2)
             with col3:
-                # Minimum value input
-                min_val = (
-                    -1000000.0
-                    if data_type
-                    in [DataType.FLOAT, DataType.CURRENCY, DataType.PERCENTAGE]
-                    else -1000000
-                )
                 params["Min"] = self._create_number_input(
-                    "Minimum", min_val, 1000000.0, 0.0, 0.1, f"min_{idx}"
+                    "Minimum", -1000000.0, 1000000.0, 0.0, 0.1, f"min_{idx}"
                 )
             with col4:
-                # Maximum value input
-                max_val = (
-                    1000000.0
-                    if data_type
-                    in [DataType.FLOAT, DataType.CURRENCY, DataType.PERCENTAGE]
-                    else 1000000
-                )
                 params["Max"] = self._create_number_input(
-                    "Maximum", min_val, 1000000.0, 100.0, 0.1, f"max_{idx}"
+                    "Maximum", -1000000.0, 1000000.0, 100.0, 0.1, f"max_{idx}"
                 )
         # Decimal places for float
         if data_type == DataType.FLOAT:
@@ -650,7 +659,7 @@ class DatasetUI:
             params["Percentages"] = percentages
             params["Individual Means"] = individual_means
             params["Individual Standard Deviations"] = individual_stds
-            st.session_state.columns[idx].params = params
+        st.session_state.columns[idx].params = params
 
     def _render_column_management(self):
         """Render column management controls."""
