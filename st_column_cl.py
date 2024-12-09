@@ -119,31 +119,21 @@ class DataGenerator:
 
     def _generate_integer(self, params: ParamDict, num_rows: int) -> pd.Series:
         min_val, max_val = params.get("Min", 0), params.get("Max", 100)
-        print(f"DEBUG: Min={min_val}, Max={max_val}")  # Debug Min and Max values
+        mean = params.get("Mean", (min_val + max_val) / 2)
+        std = params.get("Standard Deviation", (max_val - min_val) / 6)
+
+        print(f"DEBUG: Min={min_val}, Max={max_val}, Mean={mean}, Std={std}")  # Debug log
 
         if min_val >= max_val:
             raise ValueError("Min must be less than Max.")
-
+        
         use_normal = params.get("Use Normal Distribution", False)
         if use_normal:
-            mean = params.get("Mean", (min_val + max_val) / 2)
-            std = params.get("Standard Deviation", (max_val - min_val) / 6)
-            print(f"DEBUG: Mean={mean}, Std={std}")  # Debug Mean and Std values
-
-            # Generate normal distribution values and clip them within Min and Max
             values = np.random.normal(mean, std, num_rows)
             clipped_values = np.clip(values, min_val, max_val)
-            print(
-                f"DEBUG: Generated Values={values}, Clipped Values={clipped_values}"
-            )  # Debug generated values
-
             return pd.Series(clipped_values.round().astype(int))
         else:
-            # Generate uniformly distributed integers within Min and Max
             values = np.random.randint(min_val, max_val, num_rows)
-            print(f"DEBUG: Generated Uniform Values={values}")  # Debug uniform values
-
-            # Clip the uniform values to ensure they respect the Min and Max
             clipped_values = np.clip(values, min_val, max_val)
             return pd.Series(clipped_values)
 
@@ -153,21 +143,23 @@ class DataGenerator:
             params.get("Max", 100.0),
             params.get("Decimals", 2),
         )
-        mean, use_normal = (
-            float(params.get("Mean", (min_val + max_val) / 2)),
-            params.get("Use Normal Distribution", False),
-        )
+        mean = params.get("Mean", (min_val + max_val) / 2)
+        std = params.get("Standard Deviation", (max_val - min_val) / 6)
+
+        print(f"DEBUG: Min={min_val}, Max={max_val}, Mean={mean}, Std={std}")  # Debug log
+
+        if min_val >= max_val:
+            raise ValueError("Min must be less than Max.")
+        
+        use_normal = params.get("Use Normal Distribution", False)
         if use_normal:
-            std = float(params.get("Standard Deviation", (max_val - min_val) / 6))
-            return pd.Series(
-                np.round(
-                    np.clip(np.random.normal(mean, std, num_rows), min_val, max_val),
-                    decimals,
-                )
-            )
-        return pd.Series(
-            np.round(np.random.uniform(min_val, max_val, num_rows), decimals)
-        )
+            values = np.random.normal(mean, std, num_rows)
+            clipped_values = np.clip(values, min_val, max_val)
+        else:
+            values = np.random.uniform(min_val, max_val, num_rows)
+            clipped_values = np.clip(values, min_val, max_val)
+        
+        return pd.Series(np.round(clipped_values, decimals))
 
     def _generate_percentage(self, params: ParamDict, num_rows: int) -> pd.Series:
         min_val, max_val, decimals = (
@@ -512,43 +504,37 @@ class DatasetUI:
             DataType.PERCENTAGE,
             DataType.CURRENCY,
         ]:
-            col3, col4 = st.columns(2)
-            with col3:
-                params["Min"] = self._create_number_input(
-                    "Minimum", -1000000.0, 1000000.0, 0.0, 0.1, f"min_{idx}"
-                )
-            with col4:
-                params["Max"] = self._create_number_input(
-                    "Maximum", -1000000.0, 1000000.0, 100.0, 0.1, f"max_{idx}"
-                )
-        # Decimal places for float
-        if data_type == DataType.FLOAT:
-            decimal_places = st.number_input(
-                "Number of Decimal Places",
-                min_value=1,
-                max_value=10,
-                value=2,
-                key=f"decimals_{idx}",
-            )
-            params["Decimals"] = decimal_places
-        # Normal distribution option
-        if data_type in [DataType.INTEGER, DataType.FLOAT]:
-            use_normal = self._create_checkbox(
-                "Use Normal Distribution",
-                key=f"use_normal_{idx}",
-                help_text="Generate data following a normal distribution",
-            )
-            params["Use Normal Distribution"] = use_normal
-            if use_normal:
-                col1, col2 = st.columns(2)
-                with col1:
+            if data_type in [DataType.INTEGER, DataType.FLOAT]:
+                col3, col4 = st.columns(2)
+                with col3:
+                    # Minimum value input
+                    params["Min"] = self._create_number_input(
+                        "Minimum", -1000000.0, 1000000.0, 0.0, 0.1, f"min_{idx}"
+                    )
+                with col4:
+                    # Maximum value input
+                    params["Max"] = self._create_number_input(
+                        "Maximum", -1000000.0, 1000000.0, 100.0, 0.1, f"max_{idx}"
+                    )
+                
+                # For both Integer and Float types, show mean and standard deviation inputs
+                col5, col6 = st.columns(2)
+                with col5:
                     params["Mean"] = self._create_number_input(
-                        "Mean", -1000000.0, 1000000.0, 50.0, 0.1, f"mean_{idx}"
+                        "Mean", -1000000.0, 1000000.0, (params.get("Min", 0) + params.get("Max", 100)) / 2, 0.1, f"mean_{idx}"
                     )
-                with col2:
+                with col6:
                     params["Standard Deviation"] = self._create_number_input(
-                        "Standard Deviation", 0.1, 1000000.0, 10.0, 0.1, f"std_{idx}"
+                        "Standard Deviation", 0.1, 1000000.0, (params.get("Max", 100) - params.get("Min", 0)) / 6, 0.1, f"std_{idx}"
                     )
+                
+                # Option to use normal distribution for Integer and Float types
+                use_normal = self._create_checkbox(
+                    "Use Normal Distribution",
+                    key=f"use_normal_{idx}",
+                    help_text="Generate data following a normal distribution"
+                )
+                params["Use Normal Distribution"] = use_normal
         elif data_type == DataType.PERCENTAGE:
             col1, col2 = st.columns(2)
             with col1:
