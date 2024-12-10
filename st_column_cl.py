@@ -121,12 +121,11 @@ class DataGenerator:
         min_val, max_val = params.get("Min", 0), params.get("Max", 100)
         mean = params.get("Mean", (min_val + max_val) / 2)
         std = params.get("Standard Deviation", (max_val - min_val) / 6)
-
-        print(f"DEBUG: Min={min_val}, Max={max_val}, Mean={mean}, Std={std}")  # Debug log
-
+        print(
+            f"DEBUG: Min={min_val}, Max={max_val}, Mean={mean}, Std={std}"
+        )  # Debug log
         if min_val >= max_val:
             raise ValueError("Min must be less than Max.")
-        
         use_normal = params.get("Use Normal Distribution", False)
         if use_normal:
             values = np.random.normal(mean, std, num_rows)
@@ -145,12 +144,11 @@ class DataGenerator:
         )
         mean = params.get("Mean", (min_val + max_val) / 2)
         std = params.get("Standard Deviation", (max_val - min_val) / 6)
-
-        print(f"DEBUG: Min={min_val}, Max={max_val}, Mean={mean}, Std={std}")  # Debug log
-
+        print(
+            f"DEBUG: Min={min_val}, Max={max_val}, Mean={mean}, Std={std}"
+        )  # Debug log
         if min_val >= max_val:
             raise ValueError("Min must be less than Max.")
-        
         use_normal = params.get("Use Normal Distribution", False)
         if use_normal:
             values = np.random.normal(mean, std, num_rows)
@@ -158,7 +156,6 @@ class DataGenerator:
         else:
             values = np.random.uniform(min_val, max_val, num_rows)
             clipped_values = np.clip(values, min_val, max_val)
-        
         return pd.Series(np.round(clipped_values, decimals))
 
     def _generate_percentage(self, params: ParamDict, num_rows: int) -> pd.Series:
@@ -281,44 +278,94 @@ class DataGenerator:
     def _generate_boolean(self, params: ParamDict, num_rows: int) -> pd.Series:
         return pd.Series(np.random.choice([True, False], num_rows))
 
-    def _generate_custom_list(self, params: ParamDict, num_rows: int) -> pd.Series:
+    def _generate_custom_list(self, params: dict, num_rows: int) -> pd.Series:
         """
-        Generate a custom list based on user-defined values and their corresponding percentages.
+        Generate a custom list based on user-defined values and their corresponding percentages,
+        and debug the result for percentages, means, and standard deviations.
         Args:
-            params (ParamDict): A dictionary containing "Values" and "Percentages".
+            params (dict): A dictionary containing "Value Names", "Percentages",
+                        "Individual Means", and "Individual Standard Deviations".
             num_rows (int): Number of rows in the generated dataset.
         Returns:
-            pd.Series: A Pandas Series with randomly chosen values based on percentages.
+            pd.Series: A Pandas Series with values generated based on user-defined rules.
         """
         values = params["Value Names"]
         percentages = params["Percentages"]
         individual_means = params["Individual Means"]
         individual_stds = params["Individual Standard Deviations"]
-        # Validate percentages
+        # Validate inputs
         if not np.isclose(sum(percentages), 100.0):
             raise ValueError("Percentages must sum to 100.")
-        if (
-            len(values) != len(percentages)
-            or len(values) != len(individual_means)
-            or len(values) != len(individual_stds)
+        if not (
+            len(values)
+            == len(percentages)
+            == len(individual_means)
+            == len(individual_stds)
         ):
             raise ValueError(
                 "The number of values, percentages, means, and standard deviations must match."
             )
-        # Convert percentages to probabilities
-        probabilities = np.array(percentages) / 100
-        # Generate values based on probabilities
+        if num_rows <= 0:
+            raise ValueError("The number of rows must be greater than zero.")
+        if not all(isinstance(m, (int, float)) for m in individual_means):
+            raise ValueError("All means must be numeric.")
+        if not all(isinstance(s, (int, float)) for s in individual_stds):
+            raise ValueError("All standard deviations must be numeric.")
+        # Convert percentages to exact counts, with rounding adjustments
+        expected_counts = (np.array(percentages) / 100 * num_rows).astype(int)
+        remainder = num_rows - sum(expected_counts)
+        # Handle the remainder by distributing it to the categories proportionally
+        if remainder > 0:
+            # Find the largest discrepancies (rounded down counts) and add remainder there
+            sorted_indices = np.argsort(percentages)
+            for i in sorted_indices[-remainder:]:
+                expected_counts[i] += 1
+        # Generate values
         generated_values = []
-        for _ in range(num_rows):
-            # Select a value based on its percentage
-            value_idx = np.random.choice(len(values), p=probabilities)
-            # Generate a value using the corresponding mean and standard deviation
-            generated_value = np.random.normal(
-                loc=individual_means[value_idx], scale=individual_stds[value_idx]
+        for value_idx, count in enumerate(expected_counts):
+            # Generate Gaussian values for the given count
+            if isinstance(values[value_idx], (int, float)):
+                values_for_idx = np.random.normal(
+                    loc=individual_means[value_idx],
+                    scale=individual_stds[value_idx],
+                    size=count,
+                )
+            else:
+                values_for_idx = [values[value_idx]] * count  # Non-numeric values
+            generated_values.extend(values_for_idx)
+        # Shuffle generated values to avoid order bias
+        np.random.shuffle(generated_values)
+        result_series = pd.Series(generated_values)
+        # Debugging: Analyze the result
+        debug_info = []
+        total_count = len(result_series)
+        for value in values:
+            value_rows = result_series[result_series == value]
+            count = len(value_rows)
+            percentage = (count / total_count) * 100
+            # Only calculate mean and standard deviation for numeric data
+            if isinstance(value, (int, float)):
+                mean = value_rows.mean() if len(value_rows) > 0 else None
+                std = value_rows.std(ddof=0) if len(value_rows) > 1 else None
+            else:
+                mean = "N/A"
+                std = "N/A"
+            debug_info.append(
+                {
+                    "Value Name": value,
+                    "Count": count,
+                    "Percentage": round(percentage, 2),
+                    "Mean": mean if mean is not None else "N/A",
+                    "Standard Deviation": std if std is not None else "N/A",
+                    "Expected Mean": individual_means[values.index(value)],
+                    "Expected Std Dev": individual_stds[values.index(value)],
+                }
             )
-            # Append the selected value's name
-            generated_values.append(values[value_idx])
-        return pd.Series(generated_values)
+        # Convert the debug info to a pandas DataFrame for better display
+        debug_df = pd.DataFrame(debug_info)
+        # Print debug information in tabular format
+        st.table(debug_df)
+        return result_series
 
     def _generate_ordinal(self, params: ParamDict, num_rows: int) -> pd.Series:
         categories = params.get("Categories", "Low,Medium,High").split(",")
@@ -356,7 +403,6 @@ class DataGenerator:
         """Optimized data generation with optional correlation handling."""
         params = column_config.params
         print(f"DEBUG: column_config.params = {params}")
-        
         if column_config.type == DataType.INTEGER:
             return self._generate_integer(params, num_rows)
         generator = self.generators.get(column_config.type)
@@ -516,23 +562,31 @@ class DatasetUI:
                     params["Max"] = self._create_number_input(
                         "Maximum", -1000000.0, 1000000.0, 100.0, 0.1, f"max_{idx}"
                     )
-                
                 # For both Integer and Float types, show mean and standard deviation inputs
                 col5, col6 = st.columns(2)
                 with col5:
                     params["Mean"] = self._create_number_input(
-                        "Mean", -1000000.0, 1000000.0, (params.get("Min", 0) + params.get("Max", 100)) / 2, 0.1, f"mean_{idx}"
+                        "Mean",
+                        -1000000.0,
+                        1000000.0,
+                        (params.get("Min", 0) + params.get("Max", 100)) / 2,
+                        0.1,
+                        f"mean_{idx}",
                     )
                 with col6:
                     params["Standard Deviation"] = self._create_number_input(
-                        "Standard Deviation", 0.1, 1000000.0, (params.get("Max", 100) - params.get("Min", 0)) / 6, 0.1, f"std_{idx}"
+                        "Standard Deviation",
+                        0.1,
+                        1000000.0,
+                        (params.get("Max", 100) - params.get("Min", 0)) / 6,
+                        0.1,
+                        f"std_{idx}",
                     )
-                
                 # Option to use normal distribution for Integer and Float types
                 use_normal = self._create_checkbox(
                     "Use Normal Distribution",
                     key=f"use_normal_{idx}",
-                    help_text="Generate data following a normal distribution"
+                    help_text="Generate data following a normal distribution",
                 )
                 params["Use Normal Distribution"] = use_normal
         elif data_type == DataType.PERCENTAGE:
