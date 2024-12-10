@@ -852,23 +852,32 @@ class DatasetUI:
             with st.expander(f"Column {idx + 1}: {column.name}", expanded=True):
                 self._render_single_column_config(idx, column)
 
-    def _render_correlation_config(self):
+    def _render_correlation_config(self): 
         st.write("## Step 3: Configure Correlations")
         # Filter for numeric columns
         numeric_columns = [
             col
             for col in st.session_state.columns
-            if col.type
-            in [
+            if col.type in [
                 DataType.INTEGER,
                 DataType.FLOAT,
                 DataType.PERCENTAGE,
-                # Add more types as needed
             ]
         ]
         if len(numeric_columns) < 2:
             st.info("Add at least two numeric columns to configure correlations.")
             return
+
+        # Use the provided CORRELATION_TYPES dictionary
+        CORRELATION_TYPES = {
+            "Positive High": (0.7, 1.0),
+            "Positive Average": (0.4, 0.69),
+            "Positive Low": (0.1, 0.39),
+            "Negative High": (-1.0, -0.7),
+            "Negative Average": (-0.69, -0.4),
+            "Negative Low": (-0.39, -0.1),
+        }
+
         with st.container(border=True):
             st.write("### Correlation Matrix Configuration")
             st.markdown("""
@@ -877,54 +886,87 @@ class DatasetUI:
             - 🔴 **Negative Correlation**: Variables move in opposite directions
             - 🔷 **No Correlation**: Variables are independent
             """)
-            # Initialize correlation matrix
+
+            # Initialize correlation matrix with actual numeric values
             correlation_matrix = np.full(
+                (len(numeric_columns), len(numeric_columns)), None
+            )
+            correlation_value_matrix = np.full(
                 (len(numeric_columns), len(numeric_columns)), "No Correlation"
             )
-            correlation_options = ["No Correlation"] + list(
-                self.CORRELATION_TYPES.keys()
-            )
+            correlation_options = ["No Correlation"] + list(CORRELATION_TYPES.keys())
+            
             # Create a grid of selectboxes for each pair of columns
             for row in range(len(numeric_columns)):
                 cols = st.columns(len(numeric_columns))
                 for col in range(len(numeric_columns)):
                     if row < col:
-                        # Display the selectbox for each correlation pair in a grid layout
                         with cols[col]:
-                            # Select the correlation type from the dropdown
+                            # Select the correlation type
                             selected_corr = st.selectbox(
                                 f"Correlation between {numeric_columns[row].name} and {numeric_columns[col].name}",
                                 options=correlation_options,
-                                index=correlation_options.index(
-                                    correlation_matrix[row, col]
-                                ),
+                                index=0,  # Default to "No Correlation"
                                 key=f"corr_{row}_{col}",
                             )
-                            # Set correlation value in the matrix
-                            correlation_matrix[row, col] = selected_corr
-                            correlation_matrix[col, row] = selected_corr
+
+                            # Set correlation value
+                            if selected_corr != "No Correlation":
+                                # Randomly select a value within the specified range
+                                corr_range = CORRELATION_TYPES.get(selected_corr, (None, None))
+                                if corr_range:
+                                    # Use numpy to generate a random value within the specified range
+                                    correlation_value = np.random.uniform(corr_range[0], corr_range[1])
+                                    correlation_matrix[row, col] = correlation_value
+                                    correlation_matrix[col, row] = correlation_value
+
+                            correlation_value_matrix[row, col] = selected_corr
+                            correlation_value_matrix[col, row] = selected_corr
+
+            # Set the diagonal to 1.0 (perfect self-correlation)
+            np.fill_diagonal(correlation_matrix, 1.0)
+            np.fill_diagonal(correlation_value_matrix, "Perfect Correlation")
+
             # Apply correlations button
             if st.button("Apply Correlations"):
                 for row in range(len(numeric_columns)):
                     column = numeric_columns[row]
-                    column_correlations = [
-                        {
-                            "Base Column": numeric_columns[col].name,
-                            "Correlation Value": correlation_matrix[row, col],
-                        }
-                        for col in range(len(numeric_columns))
-                        if row != col
-                    ]
+                    column_correlations = []
+                    for col in range(len(numeric_columns)):
+                        if row != col:
+                            correlation_type = correlation_value_matrix[row, col]
+                            correlation_value = correlation_matrix[row, col]
+
+                            column_correlations.append({
+                                "Base Column": numeric_columns[col].name,
+                                "Correlation Type": correlation_type,
+                                "Correlation Value": correlation_value if correlation_value is not None else "No Correlation"
+                            })
                     column.correlations = column_correlations
                 st.success("Correlations updated successfully!")
+
             # Display correlation matrix overview
             st.write("### Correlation Matrix Overview")
-            corr_df = pd.DataFrame(
+            
+            # Prepare dataframes for both correlation types and values
+            corr_type_df = pd.DataFrame(
+                correlation_value_matrix,
+                columns=[col.name for col in numeric_columns],
+                index=[col.name for col in numeric_columns],
+            )
+            st.write("Correlation Types:")
+            st.dataframe(corr_type_df)
+            
+            # Create a separate dataframe for numeric correlation values
+            corr_value_df = pd.DataFrame(
                 correlation_matrix,
                 columns=[col.name for col in numeric_columns],
                 index=[col.name for col in numeric_columns],
             )
-            st.dataframe(corr_df)
+            st.write("Correlation Numeric Values:")
+            st.dataframe(corr_value_df)
+
+
 
     def _render_generation_section(self):
         """Enhanced dataset generation section with correlation control."""
