@@ -121,20 +121,28 @@ class DataGenerator:
         min_val, max_val = params.get("Min", 0), params.get("Max", 100)
         mean = params.get("Mean", (min_val + max_val) / 2)
         std = params.get("Standard Deviation", (max_val - min_val) / 6)
+        ensure_normality = params.get("Ensure Normality", False)
         print(
             f"DEBUG: Min={min_val}, Max={max_val}, Mean={mean}, Std={std}"
         )  # Debug log
         if min_val >= max_val:
             raise ValueError("Min must be less than Max.")
-        use_normal = params.get("Use Normal Distribution", False)
-        if use_normal:
-            values = np.random.normal(mean, std, num_rows)
+        # Generate normal distribution values
+        values = np.random.normal(mean, std, num_rows)
+        if ensure_normality:
+            shapiro_p = 0
+            # Regenerate data until it passes the Shapiro-Wilk test (p-value > 0.05)
+            while shapiro_p <= 0.05:
+                values = np.random.normal(mean, std, num_rows)
+                shapiro_p = stats.shapiro(values).pvalue
+                print(f"Shapiro-Wilk p-value: {shapiro_p}")  # Debug log
+            # Clip values to respect min/max boundaries but avoid distorting normality
             clipped_values = np.clip(values, min_val, max_val)
-            return pd.Series(clipped_values.round().astype(int))
         else:
-            values = np.random.randint(min_val, max_val, num_rows)
-            clipped_values = np.clip(values, min_val, max_val)
-            return pd.Series(clipped_values)
+            values = np.random.uniform(min_val, max_val, num_rows)
+            clipped_values = values
+        # Return the final data as a Pandas Series
+        return pd.Series(clipped_values)
 
     def _generate_float(self, params: ParamDict, num_rows: int) -> pd.Series:
         min_val, max_val, decimals = (
@@ -144,19 +152,25 @@ class DataGenerator:
         )
         mean = params.get("Mean", (min_val + max_val) / 2)
         std = params.get("Standard Deviation", (max_val - min_val) / 6)
+        ensure_normality = params.get("Ensure Normality", False)
         print(
             f"DEBUG: Min={min_val}, Max={max_val}, Mean={mean}, Std={std}"
         )  # Debug log
         if min_val >= max_val:
             raise ValueError("Min must be less than Max.")
-        use_normal = params.get("Use Normal Distribution", False)
-        if use_normal:
-            values = np.random.normal(mean, std, num_rows)
-            clipped_values = np.clip(values, min_val, max_val)
-        else:
-            values = np.random.uniform(min_val, max_val, num_rows)
-            clipped_values = np.clip(values, min_val, max_val)
-        return pd.Series(np.round(clipped_values, decimals))
+        # Generate normal distribution values as floats
+        values = np.random.normal(mean, std, num_rows)
+        if ensure_normality:
+            shapiro_p = 0
+            # Regenerate data until it passes the Shapiro-Wilk test (p-value > 0.05)
+            while shapiro_p <= 0.05:
+                values = np.random.normal(mean, std, num_rows)
+                shapiro_p = stats.shapiro(values).pvalue
+                print(f"Shapiro-Wilk p-value: {shapiro_p}")  # Debug log
+        # Clip values to respect min/max boundaries without distorting normality
+        clipped_values = np.clip(values, min_val, max_val)
+        # Optionally round the values for display (but keep as floats for analysis)
+        return pd.Series(np.round(clipped_values, decimals))  # Round only for display
 
     def _generate_percentage(self, params: ParamDict, num_rows: int) -> pd.Series:
         min_val, max_val, decimals = (
@@ -583,12 +597,12 @@ class DatasetUI:
                         f"std_{idx}",
                     )
                 # Option to use normal distribution for Integer and Float types
-                use_normal = self._create_checkbox(
-                    "Use Normal Distribution",
-                    key=f"use_normal_{idx}",
-                    help_text="Generate data following a normal distribution",
+                ensure_normality = self._create_checkbox(
+                    "Ensure Normality",
+                    key=f"ensure_normality_{idx}",
+                    help_text="Re-generate data until it passes the Shapiro-Wilk test",
                 )
-                params["Use Normal Distribution"] = use_normal
+                params["Ensure Normality"] = ensure_normality
         elif data_type == DataType.PERCENTAGE:
             col1, col2 = st.columns(2)
             with col1:
@@ -852,13 +866,14 @@ class DatasetUI:
             with st.expander(f"Column {idx + 1}: {column.name}", expanded=True):
                 self._render_single_column_config(idx, column)
 
-    def _render_correlation_config(self): 
+    def _render_correlation_config(self):
         st.write("## Step 3: Configure Correlations")
         # Filter for numeric columns
         numeric_columns = [
             col
             for col in st.session_state.columns
-            if col.type in [
+            if col.type
+            in [
                 DataType.INTEGER,
                 DataType.FLOAT,
                 DataType.PERCENTAGE,
@@ -867,7 +882,6 @@ class DatasetUI:
         if len(numeric_columns) < 2:
             st.info("Add at least two numeric columns to configure correlations.")
             return
-
         # Use the provided CORRELATION_TYPES dictionary
         CORRELATION_TYPES = {
             "Positive High": (0.7, 1.0),
@@ -877,7 +891,6 @@ class DatasetUI:
             "Negative Average": (-0.69, -0.4),
             "Negative Low": (-0.39, -0.1),
         }
-
         with st.container(border=True):
             st.write("### Correlation Matrix Configuration")
             st.markdown("""
@@ -886,7 +899,6 @@ class DatasetUI:
             - 🔴 **Negative Correlation**: Variables move in opposite directions
             - 🔷 **No Correlation**: Variables are independent
             """)
-
             # Initialize correlation matrix with actual numeric values
             correlation_matrix = np.full(
                 (len(numeric_columns), len(numeric_columns)), None
@@ -895,7 +907,6 @@ class DatasetUI:
                 (len(numeric_columns), len(numeric_columns)), "No Correlation"
             )
             correlation_options = ["No Correlation"] + list(CORRELATION_TYPES.keys())
-            
             # Create a grid of selectboxes for each pair of columns
             for row in range(len(numeric_columns)):
                 cols = st.columns(len(numeric_columns))
@@ -909,24 +920,24 @@ class DatasetUI:
                                 index=0,  # Default to "No Correlation"
                                 key=f"corr_{row}_{col}",
                             )
-
                             # Set correlation value
                             if selected_corr != "No Correlation":
                                 # Randomly select a value within the specified range
-                                corr_range = CORRELATION_TYPES.get(selected_corr, (None, None))
+                                corr_range = CORRELATION_TYPES.get(
+                                    selected_corr, (None, None)
+                                )
                                 if corr_range:
                                     # Use numpy to generate a random value within the specified range
-                                    correlation_value = np.random.uniform(corr_range[0], corr_range[1])
+                                    correlation_value = np.random.uniform(
+                                        corr_range[0], corr_range[1]
+                                    )
                                     correlation_matrix[row, col] = correlation_value
                                     correlation_matrix[col, row] = correlation_value
-
                             correlation_value_matrix[row, col] = selected_corr
                             correlation_value_matrix[col, row] = selected_corr
-
             # Set the diagonal to 1.0 (perfect self-correlation)
             np.fill_diagonal(correlation_matrix, 1.0)
             np.fill_diagonal(correlation_value_matrix, "Perfect Correlation")
-
             # Apply correlations button
             if st.button("Apply Correlations"):
                 for row in range(len(numeric_columns)):
@@ -936,18 +947,19 @@ class DatasetUI:
                         if row != col:
                             correlation_type = correlation_value_matrix[row, col]
                             correlation_value = correlation_matrix[row, col]
-
-                            column_correlations.append({
-                                "Base Column": numeric_columns[col].name,
-                                "Correlation Type": correlation_type,
-                                "Correlation Value": correlation_value if correlation_value is not None else "No Correlation"
-                            })
+                            column_correlations.append(
+                                {
+                                    "Base Column": numeric_columns[col].name,
+                                    "Correlation Type": correlation_type,
+                                    "Correlation Value": correlation_value
+                                    if correlation_value is not None
+                                    else "No Correlation",
+                                }
+                            )
                     column.correlations = column_correlations
                 st.success("Correlations updated successfully!")
-
             # Display correlation matrix overview
             st.write("### Correlation Matrix Overview")
-            
             # Prepare dataframes for both correlation types and values
             corr_type_df = pd.DataFrame(
                 correlation_value_matrix,
@@ -956,7 +968,6 @@ class DatasetUI:
             )
             st.write("Correlation Types:")
             st.dataframe(corr_type_df)
-            
             # Create a separate dataframe for numeric correlation values
             corr_value_df = pd.DataFrame(
                 correlation_matrix,
@@ -965,8 +976,6 @@ class DatasetUI:
             )
             st.write("Correlation Numeric Values:")
             st.dataframe(corr_value_df)
-
-
 
     def _render_generation_section(self):
         """Enhanced dataset generation section with correlation control."""
