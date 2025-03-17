@@ -80,7 +80,7 @@ class DataGenerator:
     """Generates synthetic data based on column configurations."""
 
     CORRELATION_TYPES = {
-        "Positive High": (0.7, 1.0),
+        "Positive High": (0.8, 1.0),
         "Positive Average": (0.4, 0.69),
         "Positive Low": (0.1, 0.39),
         "Negative High": (-1.0, -0.7),
@@ -424,6 +424,54 @@ class DataGenerator:
             raise ValueError(
                 f"No generator defined for data type: {column_config.type}"
             )
+        if "Impact Variable" in column_config.params:
+            impact_column_name = column_config.params["Impact Variable"]
+            impact_column_data = (
+                existing_data[impact_column_name]
+                if impact_column_name in existing_data
+                else None
+            )
+
+            if impact_column_data is not None:
+                impact_relationship = column_config.params["Impact Relationship"]
+
+                if impact_relationship != "Custom":
+                    strength = column_config.params["Impact Strength"]
+                    noise = column_config.params["Impact Noise"]
+
+                    # Apply impact with noise
+                    if impact_relationship == "Positive":
+                        impacted_data = base_data + impact_column_data * strength
+                    elif impact_relationship == "Negative":
+                        impacted_data = base_data - impact_column_data * strength
+
+                    impacted_data += np.random.normal(
+                        0, np.std(impacted_data) * noise, num_rows
+                    )  # Add noise
+
+                elif impact_relationship == "Custom":
+                    custom_function_code = column_config.params["Custom Function"]
+                    try:
+                        # Compile the custom function (do this once, maybe in __init__)
+                        compiled_function = compile(
+                            custom_function_code, "<string>", "exec"
+                        )
+                        local_vars = {}
+                        exec(compiled_function, globals(), local_vars)
+                        custom_impact_func = local_vars["custom_impact"]
+
+                        impacted_data = np.array(
+                            [
+                                custom_impact_func(i, b)
+                                for i, b in zip(impact_column_data, base_data)
+                            ]
+                        )
+
+                    except Exception as e:
+                        st.error(f"Error in custom function: {e}")
+                        return base_data  # Return original data if error
+
+                return pd.Series(impacted_data, dtype=np.float32)
         # Generate base data using vectorized method
         base_data = generator(column_config.params, num_rows)
         # Quick correlation application
@@ -464,7 +512,7 @@ class DataGenerator:
         for i, corr in enumerate(correlations):
             # Get the correlation range from CORRELATION_TYPES
             correlation_range = self.CORRELATION_TYPES.get(
-                corr.get("Correlation Value", "No Correlation"), (0, 0)
+                corr.get("Correlation Type", "No Correlation"), (0, 0)
             )
             # Randomly select a single correlation value for each correlation type
             corr_value = random.uniform(correlation_range[0], correlation_range[1])
@@ -748,13 +796,15 @@ class DatasetUI:
         st.title("Dr.Shah's Dataset Generator")
         with st.sidebar:
             st.title("Help Information")
-            st.markdown("""
+            st.markdown(
+                """
                 ### How to use this app
                 1. Set the number of rows and columns.
                 2. Configure each column's data type and parameters.
                 3. Set correlations between numeric columns.
                 4. Generate and analyze your dataset.
-            """)
+            """
+            )
         self._render_row_column_config()
         self._render_column_management()
         if st.session_state.columns:
@@ -850,9 +900,11 @@ class DatasetUI:
             data_type = st.selectbox(
                 "Data Type",
                 options=available_types,
-                index=available_types.index(column.type)
-                if column.type in available_types
-                else 0,
+                index=(
+                    available_types.index(column.type)
+                    if column.type in available_types
+                    else 0
+                ),
                 key=f"data_type_{idx}",
             )
             st.session_state.columns[idx].type = DataType(data_type)
@@ -865,6 +917,7 @@ class DatasetUI:
         for idx, column in enumerate(st.session_state.columns):
             with st.expander(f"Column {idx + 1}: {column.name}", expanded=True):
                 self._render_single_column_config(idx, column)
+                self._render_impact_config(idx, column)
 
     def _render_correlation_config(self):
         st.write("## Step 3: Configure Correlations")
@@ -893,12 +946,14 @@ class DatasetUI:
         }
         with st.container(border=True):
             st.write("### Correlation Matrix Configuration")
-            st.markdown("""
+            st.markdown(
+                """
             - Select correlation types between numeric columns
             - 🟢 **Positive Correlation**: Variables move together
             - 🔴 **Negative Correlation**: Variables move in opposite directions
             - 🔷 **No Correlation**: Variables are independent
-            """)
+            """
+            )
             # Initialize correlation matrix with actual numeric values
             correlation_matrix = np.full(
                 (len(numeric_columns), len(numeric_columns)), None
@@ -951,9 +1006,11 @@ class DatasetUI:
                                 {
                                     "Base Column": numeric_columns[col].name,
                                     "Correlation Type": correlation_type,
-                                    "Correlation Value": correlation_value
-                                    if correlation_value is not None
-                                    else "No Correlation",
+                                    "Correlation Value": (
+                                        correlation_value
+                                        if correlation_value is not None
+                                        else "No Correlation"
+                                    ),
                                 }
                             )
                     column.correlations = column_correlations
@@ -976,6 +1033,126 @@ class DatasetUI:
             )
             st.write("Correlation Numeric Values:")
             st.dataframe(corr_value_df)
+
+    def _render_impact_config(self, idx, column):
+        st.subheader(f"Impact Variable for {column.name}")
+
+        available_impact_columns = [
+            col for col in st.session_state.columns if col != column
+        ]
+
+        impact_options = ["None"]
+        impact_tooltips = {"None": "No impact variable selected."}
+        for col in available_impact_columns:
+            impact_options.append(col.name)
+            tooltip = f"Data Type: {col.type}"
+
+            if self._is_circular_dependency(
+                column, col
+            ):  # Check for circular dependencies
+                tooltip += " - Circular dependency detected. This column is already impacted by another column."
+            else:
+                impact_tooltips[col.name] = tooltip
+
+        help_string = "Select a column to impact this column's data generation. Options:\\n"
+        for name, tooltip in impact_tooltips.items():
+            help_string += f"- {name}: {tooltip}\\n"
+
+        impact_column_name = st.selectbox(
+            "Select Impact Variable",
+            options=impact_options,
+            key=f"impact_col_{idx}",
+            format_func=lambda x: x,  # Display column name
+            help=help_string,  # Tooltip as a single string
+        )
+        if impact_column_name != "None":
+            impact_config = column.params.get("impact", {})
+            impact_config["variable"] = impact_column_name
+
+            impact_column = next(
+                col
+                for col in st.session_state.columns
+                if col.name == impact_column_name
+            )
+
+            impact_relationship = st.selectbox(
+                "Impact Relationship",
+                options=["Positive", "Negative", "Custom"],
+                key=f"impact_rel_{idx}",
+                help={
+                    "Positive": "Impact variable increases the base data.",
+                    "Negative": "Impact variable decreases the base data.",
+                    "Custom": "Define a custom function to determine the impact.",
+                },
+            )
+            impact_config["relationship"] = impact_relationship
+
+            if impact_relationship != "Custom":
+                strength = st.slider(
+                    "Strength of Impact",
+                    0.0,
+                    1.0,
+                    0.5,
+                    0.05,
+                    key=f"impact_strength_{idx}",
+                    help="Strength of the impact (0.0 - 1.0).",
+                )
+                impact_config["strength"] = strength
+
+                noise = st.slider(
+                    "Noise/Variability",
+                    0.0,
+                    1.0,
+                    0.2,
+                    0.05,
+                    key=f"impact_noise_{idx}",
+                    help="Amount of random noise added (0.0 - 1.0).",
+                )
+                impact_config["noise"] = noise
+
+            elif impact_relationship == "Custom":
+                st.write(
+                    "Enter a Python function to define the custom impact (use 'impact_value' and 'base_value' as arguments):"
+                )
+                custom_function_code = st.text_area(
+                    "Custom Function",
+                    height=150,
+                    placeholder="""
+def custom_impact(impact_value, base_value):
+    # Example: Apply a logarithmic transformation if impact_value > 10
+    if impact_value > 10:
+        return base_value * np.log(impact_value)
+    else:
+        return base_value + impact_value * 0.2  # Linear impact
+""",
+                    key=f"custom_func_{idx}",
+                    help="""
+                    Define a function named `custom_impact` that takes two arguments: `impact_value` (the value of the impact variable) and `base_value` (the original value). The function should return the modified value after applying the impact.  Use NumPy for vectorized operations if possible.
+                    """,
+                )
+                try:
+                    compiled_function = compile(
+                        custom_function_code, "<string>", "exec"
+                    )
+                    local_vars = {}
+                    exec(compiled_function, globals(), local_vars)
+                    impact_config["function"] = local_vars["custom_impact"]
+                except Exception as e:
+                    st.error(f"Error in custom function: {e}")
+
+            column.params["impact"] = impact_config  # Store the entire config
+
+        else:
+            if "impact" in column.params:
+                del column.params["impact"]
+
+    def _is_circular_dependency(self, base_column, impact_column):
+        # Implement your circular dependency check here.  This is a simplified example:
+        if "impact" in impact_column.params:
+            impacted_by = impact_column.params["impact"].get("variable")
+            if impacted_by == base_column.name:
+                return True
+        return False
 
     def _render_generation_section(self):
         """Enhanced dataset generation section with correlation control."""
@@ -1067,12 +1244,6 @@ class DataAnalyzer:
             st.write("No numeric columns available for analysis.")
 
 
-def main():
-    """Main application entry point."""
-    st.set_page_config(page_title="Dataset Generator", page_icon="📊", layout="wide")
+if __name__ == "__main__":
     ui = DatasetUI()
     ui.render_configuration_ui()
-
-
-if __name__ == "__main__":
-    main()
